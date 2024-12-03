@@ -1,0 +1,824 @@
+---
+title: "PMcode"
+author: "Yuxiao Li"
+date: "4/8/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment=NA, fig.path = "R_Figs/")
+```
+
+
+```{r}
+rm(list=ls())
+```
+
+# Data load
+
+ - `kriging.csv`: 기후자료와 미세먼지 자료를 병합한 데이터, 파이썬(Applicaiton_Study.ipynb)파일 실행하면 얻을 수 있음.
+
+```{r}
+library(sf)
+library(maps)
+
+data_kriging <- read.csv("./kriging.csv",header = TRUE)
+names(data_kriging) <- c("index","long","lat","prec","temp","pres","rh","uwind","vwind","pm25","pm25_class","pm25_log")
+```
+
+
+```{r}
+dim(data_kriging)
+```
+
+# Variogram fitting
+
+## Basic Variogram EDA
+
+```{r variogram_cloud}
+library(geoR)
+vag_data <- data_kriging[,c("long","lat","pm25")]
+
+est_vario_cloud <- variog(coords = vag_data[, 1:2], data = vag_data$pm25 , option = "cloud",
+                           max.dist = 1, estimator.type='classical',message=FALSE)
+est_vario_classic <- variog(coords = vag_data[, 1:2], data = vag_data$pm25 , option = "bin",
+                            max.dist = 1, estimator.type='classical',message=FALSE)
+
+
+
+par(mfrow=c(1,2))
+
+plot(est_vario_cloud,main='Cloud',col='blue',lwd=1)
+
+plot(est_vario_classic,main='Bin',col='blue',lwd=2)
+lines(est_vario_classic,main='Bin',col='black',lwd=2)
+
+
+```
+
+
+max.dist를 0.9로 설정하는 것이 적절해 보입니다.
+
+
+## Parametic Model fitting
+
+### Matern Model
+
+```{r variogram_fit_mat, warning=FALSE, message=FALSE}
+md <- 0.9
+
+est_variog <- variog(coords = vag_data[, 1:2], data = vag_data$pm25,
+                     max.dist = md, estimator.type='classical', message=FALSE)
+# ols 터짐
+# ols=variofit(est_variog, ini=c(10, 0.3),cov.model='mat',
+#             fix.kappa=FALSE, kap=1.5, nug=5, weights='equal', messages=FALSE)
+
+wls1=variofit(est_variog, ini=c(10, 0.3), cov.model='mat', 
+             fix.kappa=FALSE, kap=1.5, nug=5, weights='cressie',messages=FALSE)
+
+wls2=variofit(est_variog, ini=c(10, 0.3), cov.model='mat', 
+             fix.kappa=T, kap=1.5, nug=5, weights='cressie',messages=FALSE)
+
+wls3=variofit(est_variog, ini=c(10, 0.3), cov.model='mat', 
+             fix.kappa=T, kap=2.5, nug=5, weights='cressie',messages=FALSE)
+
+par(cex=0.7,cex.lab=2,cex.main=1.5,oma=c(0,1,0,0))
+
+plot(est_variog,main='',col='blue',lwd=2)
+#lines(ols,lwd=1.5)
+lines(wls1,lty=3,lwd=1.5, col='red')
+lines(wls2,lty=4,lwd=1.5, col='green')
+lines(wls3,lty=5,lwd=1.5, col='purple')
+legend('bottomright',c('ols','wls1','wls2','wls3'),
+       col=c('black','red','green','purple'), lty=1:4, cex=2)
+
+``` 
+
+```{r}
+# 추정 결과 확인
+wls1
+wls2
+wls3
+```
+
+smoothness parameter $\kappa$를 추정하는 것은 어려운 문제이기 때문에, $\kappa$를 고정하는 것이 더 적절해 보입니다. 이때, 고정할 $\kappa$값은 `variofit: minimised weighted sum of squares`의 값이 더 작은 값으로 설정하는 것이 좋을것 입니다.
+
+하지만, Matern만 고려하는 것 보다 다양한 모형을 고려하는 것이 좋을 수 있기 때문에, 다양한 모형을 고려하여 추정을 진행해 보겠습니다.
+
+```{r variogram_fit_all}
+# 가우시안
+wls_gau=variofit(est_variog, ini=c(10, 0.3), cov.model='gaussian', 
+                 nug=5, weights='cressie',messages=FALSE)
+# 지수
+wls_exp=variofit(est_variog, ini=c(10, 0.3), cov.model='exponential', 
+                 nug=5, weights='cressie',messages=FALSE)
+# 스페리컬
+wls_sph=variofit(est_variog, ini=c(10, 0.3), cov.model='spherical', 
+                 nug=5, weights='cressie',messages=FALSE)
+
+par(cex=0.7,cex.lab=2,cex.main=1.5,oma=c(0,1,0,0))
+
+plot(est_variog,main='',col='blue',lwd=3)
+lines(wls_gau,lty=1,lwd=2,col='red')
+lines(wls_exp,lty=2,lwd=2,col='green')
+lines(wls_sph,lty=3,lwd=2,col='purple')
+lines(wls1, lty=4, lwd=2, col='orange')
+lines(wls2, lty=5, lwd=2, col='black')
+lines(wls3, lty=6, lwd=2, col='brown')
+
+legend('bottomright',c('gaussian','exponential','spherical',
+                       'matern1','matern2','matern3'),
+       col=c('red','green','purple','orange','black','brown'), lty=1:6, cex=2)
+
+```
+
+```{r}
+# 추정 결과 한번에 확인
+wls_gau
+wls_exp
+wls_sph
+wls1
+wls2
+wls3
+```
+
+Minimized weighted sum of squares값이 가장 작은 `covariance model is: matern with fixed kappa = 2.5`모형을 사용하는 것이 가장 적절해 보입니다.
+
+# [CV] Universal Kriging(UK)
+
+## Universal Kriging in R
+
+Universal Kriging은 Simple, Ordinary Kriging과 다르게 Observation location과 Prediction location의 Covariate 정보까지 고려해서 Kriging을 수행하는 방법입니다. 아래 코드 블럭의 Parameter Estimation과 Kriging 수행을 위한 코드는 아래와 같습니다. 
+
+**Geodata for Universal Kriging**
+
+Universal Kriging을 위해서는 같은 위치에서 어떤 colunm이 target(observed process)이고 어떤 colunm이 covariate인지를 명확히 해야합니다. 이때, `as.geodata()` 함수를 사용하여 `geodata` 객체를 생성합니다. 중요 옵션은 다음과 같습니다.
+
+ - `coords.col`: 위도, 경도 정보가 있는 열을 설정
+ - `data.col`: target이 있는 열을 설정
+ - `covar.col`: covariate이 있는 열을 설정
+
+**Estimation**
+
+여기서 Parameter Estimation은 *ML* 방법을 사용하여 $\beta$ 및 공분산 함수 모수를 추정합니다. 이때, `likfit()` 함수를 사용하여 추정을 수행합니다. 중요 옵션은 다음과 같습니다.
+
+ - `cov.model`: 공분산 함수를 설정합니다. 여기서는 `spherical`을 사용하였습니다.
+ - `trend`: covarate에 대한 Trend를 설정합니다. 여기서는 `"1st"` 즉, 선형관계를 설정 하였습니다. 이는 다음과 같은 모형을 고려한 것입니다.
+ 
+ $$
+ Z(s) = X(s)\boldsymbol{\beta} + \nu(s) + \epsilon(s), \; s \in D \subset \mathbb{R}^2
+ $$
+ 
+여기서 $Z(s)$는 Obseved Process, $X(s)$는 Covariate, $\boldsymbol{\beta}$는 covariate에 대한 계수, $\nu(s)$는 Spatial process, $\epsilon(s)$는 white-noise process를 의미합니다. 
+ 
+ - `add.to.trend`: 옵션을 사용하여 사용된 covariate를 설정합니다. 여기서는 `~prec+temp+pres+rh+uwind+vwind`로 설정하여, 모든 covariate를 사용하였습니다.
+
+**Universal Kriging**
+
+우선 `krige.control()` 함수를 사용하여 Kriging Object를 생성합니다. 중요 옵션은 다음과 같습니다.
+
+ - `type.krige`: Kriging 방법을 설정합니다. 여기서는 `"OK"` 즉, Ordinary Kriging을 사용하였습니다. 이때, 아래 옵션들을 사용해야 Universal Kriging을 수행할 수 있습니다.
+ - `trend.d`: train(observed) 데이터에 대한 Trend를 설정
+ - `trend.l`: valid(prediction) 데이터에 대한 Trend를 설정, 여기서 두 옵션 모두 `"1st"`로 설정하여, data에 대해서도 선형추세(평균), prediction point의 covariate에 대해서도 선형추세(평균)을 가정
+ - `obj.model`: Universal Kriging을 수행하기 위한 객체 모델(사용되는 모수들)을 지정
+
+그 다음 위에서 생성한 `krige.control()` 객체를 `krige.conv()` 함수에 넣어서 Kriging을 수행합니다. 이때, 주요 옵션은 다음과 같습니다.
+
+ - `geodata`: train(observed) 데이터에 대한 `geodata` 객체
+ - `locations`: prediction point의 위치
+ - `krige`: `krige.control()` 객체를 입력 받습니다.
+
+```{r}
+library(geoR) 
+library(caret)
+# caret 패키지는 confusionMatrix 함수를 사용하기 위해 설치
+# 엣날 패키지라 따로 설치해야함. 구글링 필요..
+
+# DeepKriging과 같은 CV 결과를 위한 index
+test_idx <- read.csv("./test_idx.csv", header = TRUE)
+
+# 빈벡터 생성
+mse = mae = acc = c()
+
+# start_time <- Sys.time()
+
+# 폴드 진행
+for (i in 1:10){
+  cat("Fold: ",i,"\n")
+    idx = na.exclude(test_idx[,i+1])
+    
+    # Train, Valid 데이터 분할
+    train_kriging=data_kriging[-idx,]
+    valid_kriging=data_kriging[idx,]
+    
+    # geodata 객체 생성
+    geodata_train = as.geodata(train_kriging, coords.col = 2:3, data.col = 10, 
+                               covar.col = 4:9)
+    geodata_valid = as.geodata(valid_kriging, coords.col = 2:3, data.col = 10, 
+                               covar.col = 4:9)
+    
+    
+    # ML방법 Beta 및 공분산 함수 모수 추정
+    geoR_fit = likfit(geodata_train, ini.cov.pars = c(18, 0.5), nugget=3, 
+                      cov.model = 'mat', kap=2.5, fix.kappa=T,
+                      trend = trend.spatial(trend='1st', geodata = geodata_train, 
+                                            add.to.trend = ~prec+temp+pres+rh+uwind+vwind),
+                      messages = FALSE)
+    
+    # Kriging 수행을 위한 객체 생성
+    krig_control = krige.control(type.krige = "OK", 
+                                 trend.d = trend.spatial(trend='1st', geodata = geodata_train, 
+                                                         add.to.trend = ~ prec + temp + pres + rh + uwind + vwind),
+                                 trend.l = trend.spatial(trend = '1st', geodata = geodata_valid, 
+                                                         add.to.trend = ~ prec + temp + pres + rh + uwind + vwind), 
+                                 obj.model = geoR_fit)
+    
+    # Kriging 수행
+    result = krige.conv(geodata_train, locations = geodata_valid$coords,
+                        krige=krig_control)
+  
+    
+    mse[i] = mean((result$predict-valid_kriging[,10])^2)
+    mae[i] = mean(abs(result$predict-valid_kriging[,10]))
+    
+    Pred_class <- cut(result$predict,c(-0.1,12,35.5))
+    levels(Pred_class)<-c(0,1)
+    acc[i] = confusionMatrix(Pred_class,as.factor(valid_kriging[,11]))$over[1]
+}
+
+# end_time <- Sys.time()
+# cat("Time: ",end_time-start_time,"\n")
+
+```
+
+```{r}
+# cv결과 요약
+cat("----------------[UK]---------------- \n")
+cat("Mean of MSE: ",mean(mse),"\n")
+cat("SD of MSE: ",sd(mse),"\n")
+cat("------------------------------------ \n")
+cat("Mean of MAE: ",mean(mae),"\n")
+cat("SD of MAE: ",sd(mae),"\n")
+cat("------------------------------------ \n")
+cat("Mean of Accuracy: ",mean(acc),"\n")
+cat("SD of Accuracy: ",sd(acc),"\n")
+cat("------------------------------------ \n")
+```
+
+# [CV] Ordinary Kriging(OK): NO X(coavariate)
+
+Ordinary Kriging은 Universal Kriging과 다르게 Covariate 정보를 사용하지 않고 Kriging을 수행하는 방법입니다. 
+
+ - `likfit()` 함수를 사용하여 추정을 수행할 때, `trend` 옵션을 사용하지 않습니다.  
+ - `krige.control()` 함수를 사용하여 Kriging Object를 생성할 때도, `trend.d`와 `trend.l` 옵션을 사용하지 않습니다.
+
+```{r}
+mse_nx = mae_nx = acc_nx = c()
+
+# start_time <- Sys.time()
+
+for (i in 1:10){
+  cat("Fold: ",i,"\n")
+    idx = na.exclude(test_idx[,i+1])
+    train_kriging=data_kriging[-idx,]
+    valid_kriging=data_kriging[idx,]
+    
+    geodata_train = as.geodata(train_kriging, coords.col = 2:3, data.col = 10)
+    geodata_valid = as.geodata(valid_kriging,coords.col = 2:3,data.col = 10)
+    
+    geoR_fit = likfit(geodata_train, ini.cov.pars = c(18, 0.5), nugget=3,
+                      cov.model = 'mat', kap=2.5, fix.kappa=T, messages = FALSE)
+    krig_control = krige.control(type.krige = "OK",  obj.model = geoR_fit)
+
+    result = krige.conv(geodata_train, locations = geodata_valid$coords,
+                        krige=krig_control)
+    
+    mse_nx[i] = mean((result$predict-valid_kriging[,10])^2)
+    mae_nx[i] = mean(abs(result$predict-valid_kriging[,10]))
+    
+    Pred_class <- cut(result$predict, c(-0.1,12,35.5))
+    levels(Pred_class)<-c(0,1)
+    acc_nx[i] = confusionMatrix(Pred_class,as.factor(valid_kriging[,11]))$over[1]
+}
+
+end_time <- Sys.time()
+
+# cat("Time: ",end_time-start_time,"\n")
+
+```
+
+```{r}
+# 결과 요약
+cat("----------------[OK]---------------- \n")
+cat("Mean of MSE: ",mean(mse_nx),"\n")
+cat("SD of MSE: ",sd(mse_nx),"\n")
+cat("------------------------------------ \n")
+cat("Mean of MAE: ",mean(mae_nx),"\n")
+cat("SD of MAE: ",sd(mae_nx),"\n")
+cat("------------------------------------ \n")
+cat("Mean of Accuracy: ",mean(acc_nx),"\n")
+cat("SD of Accuracy: ",sd(acc_nx),"\n")
+cat("------------------------------------ \n")
+```
+
+# [CV] Simple Kriging(SK)
+
+Simple Kriging은 Ordinary Kriging에서 평균 모수 $\beta$(강의노트 기준 $\mu$)를 추정하는 방법이 다른 Kriging 방법입니다.
+
+ - `beta` 옵션을 사용하여 평균 모수를 설정합니다. 이때, `mean(geodata_train$data)`를 사용하여 평균을 설정하였습니다.(강의노트 기준 $\bar{Z}$)
+
+```{r}
+mse_sk = mae_sk = acc_sk = c()
+
+# start_time <- Sys.time()
+
+for (i in 1:10){
+  cat("Fold: ",i,"\n")
+    idx = na.exclude(test_idx[,i+1])
+    train_kriging_sk=data_kriging[-idx,]
+    valid_kriging_sk=data_kriging[idx,]
+    
+    geodata_train_sk = as.geodata(train_kriging_sk, coords.col = 2:3, data.col = 10)
+    geodata_valid_sk = as.geodata(valid_kriging_sk, coords.col = 2:3, data.col = 10)
+    
+    geoR_fit_sk = likfit(geodata_train_sk, ini.cov.pars = c(18, 0.5), nugget=3,
+                      cov.model = 'mat', kap=2.5, fix.kappa=T, messages = FALSE)
+    
+    m = mean(geodata_train_sk$data)
+    
+    krig_control_sk = krige.control(type.krige = "SK", beta = m, 
+                                    obj.model = geoR_fit_sk)
+
+    result_sk = krige.conv(geodata_train_sk, locations = geodata_valid_sk$coords,
+                           krige=krig_control_sk)
+    
+    mse_sk[i] = mean((result_sk$predict-valid_kriging_sk[,10])^2)
+    mae_sk[i] = mean(abs(result_sk$predict-valid_kriging_sk[,10]))
+    
+    Pred_class_sk <- cut(result_sk$predict, c(-0.1,12,35.5))
+    levels(Pred_class_sk)<-c(0,1)
+    acc_sk[i] = confusionMatrix(Pred_class_sk ,as.factor(valid_kriging_sk[,11]))$over[1]
+}
+
+# end_time <- Sys.time()
+
+# cat("Time: ",end_time-start_time,"\n")
+
+```
+
+```{r}
+# 결과 요약
+cat("----------------[SK]---------------- \n")
+cat("Mean of MSE: ",mean(mse_sk),"\n")
+cat("SD of MSE: ",sd(mse_sk),"\n")
+cat("------------------------------------ \n")
+cat("Mean of MAE: ",mean(mae_sk),"\n")
+cat("SD of MAE: ",sd(mae_sk),"\n")
+cat("------------------------------------ \n")
+cat("Mean of Accuracy: ",mean(acc_sk),"\n")
+cat("SD of Accuracy: ",sd(acc_sk),"\n")
+cat("------------------------------------ \n")
+```
+
+
+# Fixed Rank Kriging(FRK)
+
+```{r warning=FALSE, message=FALSE}
+# Hmisc 패키지 별도 설치 필요
+# install.packages("Hmisc")
+
+# install.packages("sp") # FRK는 sp에서 사용하는 함수가 있어서 설치해야함
+# install.packages("FRK")
+library(sp)
+library(FRK)
+```
+
+## Data Setting
+
+우리가 사용하고 있는 데이터의 클래스는 `data.frame`이지만, FRK는 spatial object인 `SpatialPointsDataFrame` 혹은 `SpatialPolygonsDataFrame` 클래스를 사용합니다. 따라서, 우리는 `coordinates()` 함수를 사용하여 `SpatialPointsDataFrame` 객체를 생성합니다. 이때, 중요한 옵션은 다음과 같습니다. 이때, 우리가 사용하는 데이터는 좌표 기반이므로 `SpatialPointsDataFrame`을 사용하는 것입니다.
+
+```{r}
+# 여기서 kriging2 자료는 좌표들만 정규화 하지 않은 것입니다.
+data_kriging2 <- read.csv("./kriging2.csv", header = TRUE)
+names(data_kriging2) <- c("index","long","lat","prec","temp","pres","rh","uwind","vwind","pm25","pm25_class","pm25_log")
+
+us_metero <- read.csv("./covariate0605.csv") # 기상 자료: 예측해야 할 위치
+# head(us_metero)
+# set.seed(123)
+
+FRK_train <- data_kriging2[,c("long","lat","pm25")]
+coordinates(FRK_train) <- ~long+lat
+  # 관측 자료에서 좌표와 respose value만 SpatialPointsDataFrame으로 변환
+  # 모든 covariate는 밑의 BAUs에 들어가 있어야 함
+  ## 여기서 covariate는 f = pm25 ~ 1 + prec + temp + pres + rh + uwind + vwind 에서 사용되는 변수들을 의미함.
+
+# Prediction을 위한 BAUs 생성
+FRK_data_BAUs <- us_metero
+coordinates(FRK_data_BAUs) <- ~long+lat
+FRK_data_BAUs.grid <- BAUs_from_points(FRK_data_BAUs)
+
+```
+
+
+## Basis Setting
+
+```{r basis}
+G <- auto_basis(manifold = plane(), # 2D plane
+                 data = FRK_train, # sp object data
+                 nres = 3, # number of resolutions
+                 type = "bisquare", # type of basis function
+                 regular = 0) # place ir-regularly in domain(1: regular)
+
+png("./R_figs/basis.png", width=3000,height=2000,res=300)
+
+show_basis(G) + # illustrate basis functions
+  coord_fixed() + # fix aspect ratio
+  xlab("") + # x-label
+  ylab("") # y-label
+
+invisible(dev.off())
+
+show_basis(G) + # illustrate basis functions
+  coord_fixed() + # fix aspect ratio
+  xlab("") + # x-label
+  ylab("") # y-label
+```
+
+## Fitting and Prediction
+
+```{r}
+# install.packages("gstat")
+library(gstat)
+f <- pm25 ~ 1 + prec + temp + pres + rh + uwind + vwind
+
+start_time <- Sys.time()
+
+S <- FRK(f = f,
+         data = list(FRK_train),
+         BAUs = FRK_data_BAUs.grid,
+         method = 'TMB',
+         basis = G,
+         simple_kriging_fixed = FALSE,
+         regular = 0)
+
+Pred <- predict(S, obs_fs = FALSE)
+
+end_time <- Sys.time()
+cat("FRK Time: ",end_time-start_time,"\n")
+```
+
+## To data.frame
+
+```{r}
+# library(ggplot2)
+BAUs_df <- as.data.frame(Pred)  # convert the BAUs to data frame
+```
+
+# [CV] FRK
+
+```{r}
+mse_frk = mae_frk = acc_frk = c()
+
+# start_time <- Sys.time()
+
+for (i in 1:10){
+  cat("Fold: ",i,"\n")
+    idx = na.exclude(test_idx[,i+1])
+    train_kriging = data_kriging2[-idx,]
+    valid_kriging = data_kriging2[idx,]
+    
+    FRK_train <- train_kriging[,c("long","lat","pm25")]
+    coordinates(FRK_train) <- ~long+lat
+    
+    FRK_data_BAUs <- data_kriging2[,-c(10,11,12)]
+    coordinates(FRK_data_BAUs) <- ~long+lat
+    FRK_data_BAUs.grid <- BAUs_from_points(FRK_data_BAUs)
+    
+    G <- auto_basis(manifold = plane(),
+                 data = FRK_train,
+                 nres = 3, 
+                 type = "bisquare",
+                 regular = 0) 
+    
+    f <- pm25 ~ 1 + prec + temp + pres + rh + uwind + vwind
+    
+    S <- FRK(f = f,
+             data = list(FRK_train),
+             BAUs = FRK_data_BAUs.grid,
+             method = 'TMB',
+             basis = G,
+             simple_kriging_fixed = FALSE,
+             regular = 0)
+    
+    Pred <- predict(S, obs_fs = FALSE)
+    
+    FRK_Pred <- as.data.frame(Pred)
+    FRK_Pred_mu <- FRK_Pred$newdata.p_mu[idx]
+    
+    mse_frk[i] = mean( (FRK_Pred_mu-valid_kriging[,10])^2 )
+    mae_frk[i] = mean(abs(FRK_Pred_mu-valid_kriging[,10]))
+    
+    Pred_class <- cut(FRK_Pred_mu, c(-0.1,12,35.5))
+    levels(Pred_class)<-c(0,1)
+    acc_frk[i] = confusionMatrix(Pred_class,as.factor(valid_kriging[,11]))$over[1]
+}
+```
+
+```{r}
+# 결과 요약
+cat("----------------[FRK]---------------- \n")
+cat("Mean of MSE: ",mean(mse_frk),"\n")
+cat("SD of MSE: ",sd(mse_frk),"\n")
+cat("------------------------------------ \n")
+cat("Mean of MAE: ",mean(mae_frk),"\n")
+cat("SD of MAE: ",sd(mae_frk),"\n")
+cat("------------------------------------ \n")
+cat("Mean of Accuracy: ",mean(acc_frk),"\n")
+cat("SD of Accuracy: ",sd(acc_frk),"\n")
+cat("------------------------------------ \n")
+
+```
+
+
+# CV 결과 저장
+
+```{r}
+# 위 CV 결과들을 하나의 csv 파일로 출력
+result <- data.frame("MSE UK"=mse,"MAE UK"=mae,"ACC UK"=acc,
+                     "MSE OK"=mse_nx,"MAE OK"=mae_nx,"ACC OK"=acc_nx,
+                     "MSE SK"=mse_sk,"MAE SK"=mae_sk,"ACC SK"=acc_sk,
+                     "MSE FRK"=mse_frk,"MAE FRK"=mae_frk,"ACC FRK"=acc_frk)
+
+write.csv(result,"./R_Krig_CV_all.csv",row.names=FALSE)
+
+result
+```
+
+# CV에 사용된 데이터 확인하기
+
+```{r}
+# 빈 데이터 프레임 생성
+vc_data = data.frame(matrix(NA, nrow = 61, ncol = 20))
+names(vc_data) <- c("fold 1 pm 25", "fold 1 pm class", "flod 2 pm 25", "fold 2 pm class", "fold 3 pm 25", "fold 3 pm class", "fold 4 pm 25", "fold 4 pm class", "fold 5 pm 25", "fold 5 pm class", "fold 6 pm 25", "fold 6 pm class", "fold 7 pm 25", "fold 7 pm class", "fold 8 pm 25", "fold 8 pm class", "fold 9 pm 25", "fold 9 pm class", "fold 10 pm 25", "fold 10 pm class")
+
+# 데이터 프레임에 데이터 삽입
+for (i in 1:10){
+    idx = na.exclude(test_idx[,i+1])
+    valid_kriging = data_kriging2[idx,]
+    # 데이터의 길이가 61이면 그대로 넣고, 60이면 마지막에 NA를 붙여서 넣기
+    if (nrow(valid_kriging) == 61){
+        vc_data[,2*i-1] = valid_kriging[,10]
+        vc_data[,2*i] = valid_kriging[,11]
+    } else {
+        vc_data[,2*i-1] = c(valid_kriging[,10],rep(NA,61-nrow(valid_kriging)))
+        vc_data[,2*i] = c(valid_kriging[,11],rep(NA,61-nrow(valid_kriging)))
+    }
+   
+}
+
+vc_data
+```
+
+## 폴드별 PM25 시각화
+
+```{r,warning=FALSE, message=FALSE}
+# pm25만 따로 추출
+vc_data_pm25 = vc_data[,c(1,3,5,7,9,11,13,15,17,19)]
+
+# pm25 시각화
+boxplot(vc_data_pm25, main="PM25 by Fold", xlab="Fold", ylab="PM25")
+```
+
+
+```{r,warning=FALSE, message=FALSE}
+# pm class만 따로 추출
+vc_data_pmclass = vc_data[,c(2,4,6,8,10,12,14,16,18,20)]
+
+# pm class 비율 계산
+vc_data_pmclass_ratio = rep(9, 10)
+
+for (i in 1:10){
+  x <- na.omit(vc_data_pmclass[,i])
+  vc_data_pmclass_ratio[i] = mean(x)
+}
+
+vc_data_pmclass_ratio
+```
+
+
+# Spatial Prediction
+
+## Data Description
+
+여기서 불러온 데이터는 파이썬에서 DeepKriging을 통해 예측한 PM25 데이터입니다. 이 데이터는 `PM25_pred_0605.csv`로 저장되어 있습니다. 이 데이터는 다음과 같은 열을 가지고 있습니다.
+
+ - `index`: 인덱스
+ - `long`: 경도
+ - `lat`: 위도
+ - `prec`: 강수량
+ - `temp`: 온도
+ - `pres`: 기압
+ - `rh`: 상대습도
+ - `uwind`: 풍속
+ - `vwind`: 풍향
+ - `pm25`: DeepKriging을 통해 예측된 PM25
+
+```{r}
+pred_data = read.csv("./PM25_pred_0605.csv")
+names(pred_data)<- c("index","long","lat","prec","temp","pres","rh","uwind","vwind","pm25")
+dim(pred_data)
+```
+
+## UK
+
+```{r Kriging prediction}
+geodata_train = as.geodata(data_kriging, coords.col = 2:3, data.col = 10, covar.col = 4:9)
+geodata_pred = as.geodata(pred_data, coords.col = 2:3, data.col = 10, covar.col = 4:9)
+```
+
+
+```{r Kriging prediction}
+start_time <- Sys.time()
+
+geoR_fit_UK = likfit(geodata_train, ini.cov.pars = c(18, 0.5), nugget=3, 
+                     cov.model = 'mat', kap=2.5, fix.kappa=T,
+                     trend = trend.spatial(trend='1st', geodata = geodata_train, 
+                                           add.to.trend = ~prec+temp+pres+rh+uwind+vwind),
+                     messages = FALSE)
+
+krig_control_UK = krige.control(type.krige = "OK", 
+                             trend.d = trend.spatial(trend='1st', geodata = geodata_train, 
+                                                     add.to.trend = ~ prec + temp + pres + rh + uwind + vwind),
+                             trend.l = trend.spatial(trend = '1st', geodata = geodata_pred, 
+                                                     add.to.trend = ~ prec + temp + pres + rh + uwind + vwind),
+                             obj.model = geoR_fit_UK)
+
+result_UK = krige.conv(geodata_train, locations = geodata_pred$coords,krige=krig_control_UK)
+
+end_time <- Sys.time()
+cat("UK Time: ",end_time-start_time,"\n")
+```
+
+## OK
+
+```{r}
+# UK와 마찬가지로 진행
+
+geodata_train_nx = as.geodata(data_kriging, coords.col = 2:3, data.col = 10)
+geodata_pred_nx = as.geodata(pred_data, coords.col = 2:3, data.col = 10)
+
+start_time <- Sys.time()
+
+geoR_fit_OK = likfit(geodata_train_nx, ini.cov.pars = c(18, 0.5), nugget=3,
+                  cov.model = 'mat', kap=2.5, fix.kappa=T, messages = FALSE)
+
+krig_control_OK = krige.control(type.krige = "ok", obj.model = geoR_fit_OK)
+
+result_OK = krige.conv(geodata_train_nx, locations = geodata_pred_nx$coords, krige=krig_control_OK)
+
+end_time <- Sys.time()
+cat("OK Time: ",end_time-start_time,"\n")
+
+```
+
+## SK
+
+```{r}
+m <- mean(geodata_train_nx$data)
+
+start_time <- Sys.time()
+
+geoR_fit_SK = likfit(geodata_train_nx, ini.cov.pars = c(18, 0.5), nugget=3,
+                     cov.model = 'mat', kap=2.5, fix.kappa=T, messages = FALSE)
+
+krig_control_SK = krige.control(type.krige = "SK", beta = m , obj.model = geoR_fit_SK)
+
+result_SK = krige.conv(geodata_train_nx, locations = geodata_pred_nx$coords,
+                       krige=krig_control_SK)
+
+end_time <- Sys.time()
+cat("SK Time: ",end_time-start_time,"\n")
+```
+
+## FRK
+
+```{r}
+# Data Setting
+FRK_train <- data_kriging2[,c("long","lat","pm25")]
+coordinates(FRK_train) <- ~long+lat
+
+# Basis Setting
+G <- auto_basis(manifold = plane(), # 2D plane
+                 data = FRK_train, # sp object data
+                 nres = 3, # number of resolutions
+                 type = "bisquare", # type of basis function
+                 regular = 0) # place ir-regularly in domain
+
+# Prediction을 위한 BAUs 생성
+FRK_data_BAUs <- us_metero
+coordinates(FRK_data_BAUs) <- ~long+lat
+FRK_data_BAUs.grid <- BAUs_from_points(FRK_data_BAUs)
+
+f <- pm25 ~ 1 + prec + temp + pres + rh + uwind + vwind
+
+start_time <- Sys.time()
+
+S <- FRK(f = f,
+         data = list(FRK_train),
+         BAUs = FRK_data_BAUs.grid,
+         method = 'TMB',
+         basis = G,
+         simple_kriging_fixed = FALSE,
+         regular = 0)
+
+Pred <- predict(S, obs_fs = FALSE)
+
+end_time <- Sys.time()
+cat("FRK Time: ",end_time-start_time,"\n")
+```
+
+## To data.frame
+
+```{r}
+# library(ggplot2)
+BAUs_df <- as.data.frame(Pred)  # convert the BAUs to data frame
+```
+
+# Visualization
+
+```{r pred_plots, message=FALSE}
+# install.packages("fields")
+library(fields) # 그림 그리려고 쓰는 패키지
+
+DK_prediction <- pred_data[,10] # DeepKriging 예측값
+DK_prediction_tune <- read.csv("./PM25_pred_t_0605.csv")[,10]
+risk_pred <- read.csv("./PM25_pred_risk_0605.csv")[,10]
+
+# 이미 있는 자료 활용...
+pm25_data <- read.csv("./pm25_0605.csv") # 관측 자료
+
+# pm25의 최대값
+p_max = max(c(pm25_data$PM25, DK_prediction, DK_prediction_tune, result_UK$predict, 
+              result_OK$predict,result_SK$predict,BAUs_df$newdata.p_mu))
+
+quilt.plot(pm25_data$Longitude, pm25_data$Latitude, pm25_data$PM25,
+           zlim=c(0,p_max),main="Observed")
+
+quilt.plot(us_metero$long, us_metero$lat, DK_prediction, zlim=c(0,p_max),
+           main="DeepKriging")
+
+quilt.plot(us_metero$long, us_metero$lat, DK_prediction_tune, zlim=c(0,p_max),
+           main="DeepKriging with Tuning")
+
+quilt.plot(us_metero$long,us_metero$lat,result_UK$predict,zlim=c(0,p_max),
+           main="Universal Kriging")
+
+quilt.plot(us_metero$long,us_metero$lat,result_OK$predict,zlim=c(0,p_max),
+           main="Ordinary Kriging")
+
+quilt.plot(us_metero$long,us_metero$lat,result_SK$predict,zlim=c(0,25),
+           main="Simple Kriging")
+
+quilt.plot(BAUs_df$newdata.long, BAUs_df$newdata.lat, BAUs_df$newdata.p_mu,
+           zlim=c(0,p_max),main="FRK")
+
+```
+
+
+
+위 그림의 결과로 미루어보아 DeepKriging은 값이 낮은 지역을 좀 더 위글리 하게 맞춰서 전체적인 loss를 줄이는 방향으로 학습이 된것 같고, UK같은 경우는 관측된 지역의 값은 그대로 맞추기 때문에 값이 높은 지역에서는 DeepKriging보다 잘 맞추는 경향이 있는것 같습니다.
+
+
+
+# Plot Kriging Predictions
+
+```{r krig_plots}
+# 한번에 다그리기
+par(mfrow=c(2,3), mar=c(2,3,1.5,2), mgp=c(1.5,0.5,0))
+
+# pm25의 최대값: 크리깅 예측값
+krig_max = max(c(pm25_data$PM25,result_UK$predict, 
+              result_OK$predict,result_SK$predict,BAUs_df$newdata.p_mu))
+
+quilt.plot(pm25_data$Longitude, pm25_data$Latitude, pm25_data$PM25,
+           zlim=c(0,krig_max),main="Observed")
+
+quilt.plot(us_metero$long, us_metero$lat, result_UK$predict,zlim=c(0,krig_max),
+           main="Universal Kriging")
+
+quilt.plot(us_metero$long,us_metero$lat,result_OK$predict,zlim=c(0,krig_max),
+           main="Ordinary Kriging")
+
+quilt.plot(us_metero$long,us_metero$lat,result_SK$predict,zlim=c(0,krig_max),
+           main="Simple Kriging")
+
+quilt.plot(BAUs_df$newdata.long, BAUs_df$newdata.lat, BAUs_df$newdata.p_mu, 
+           zlim=c(0,krig_max),main="FRK")
+
+```
+
+
+
+
+
+
