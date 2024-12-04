@@ -429,19 +429,11 @@ G <- auto_basis(manifold = plane(), # 2D plane
                  type = "bisquare", # type of basis function
                  regular = 0) # place ir-regularly in domain(1: regular)
 
-png("./R_figs/basis.png", width=3000,height=2000,res=300)
-
 show_basis(G) + # illustrate basis functions
   coord_fixed() + # fix aspect ratio
   xlab("") + # x-label
   ylab("") # y-label
 
-invisible(dev.off())
-
-show_basis(G) + # illustrate basis functions
-  coord_fixed() + # fix aspect ratio
-  xlab("") + # x-label
-  ylab("") # y-label
 ```
 
 ## Fitting and Prediction
@@ -631,7 +623,7 @@ dim(pred_data)
 
 ## UK
 
-```{r Kriging prediction}
+```{r}
 geodata_train = as.geodata(data_kriging, coords.col = 2:3, data.col = 10, covar.col = 4:9)
 geodata_pred = as.geodata(pred_data, coords.col = 2:3, data.col = 10, covar.col = 4:9)
 ```
